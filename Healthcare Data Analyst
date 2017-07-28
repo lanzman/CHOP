@@ -1,0 +1,84 @@
+import os
+import numpy as np
+import pandas as pd
+import matplotlib
+import matplotlib.pyplot as plt
+matplotlib.style.use('ggplot')
+
+import seaborn as sns
+
+#Sets directory to pull in all of data from
+directory = "I:\My Documents\Data Science\CHOP"
+os.chdir(directory)
+
+# Pulls in data for analysis as .xlsx
+datadictionaryfile = './data dictionary.xlsx'
+datadictionary = pd.read_excel(datadictionaryfile)
+
+# Pulls in all data for analysis as .csv
+departmentfile = './department.csv'
+diagnosisfile = './diagnosis.csv'
+medicationorderfile = './medication_order.csv'
+visitfile = './visit.csv'
+visitdiagnosisfile = './visit_diagnosis.csv'
+department = pd.read_csv(departmentfile)
+diagnosis = pd.read_csv(diagnosisfile)
+medicationorder = pd.read_csv(medicationorderfile)
+visit = pd.read_csv(visitfile)
+visitdiagnosis = pd.read_csv(visitdiagnosisfile)
+
+#Part 1
+#Find patients where visit is a hospital encounter, after August 1, 2014, Age is greater than or equal 1 and less than or equal to 18
+visit.info()
+hospitalencounters = visit[(visit.DICT_ENC_TYPE_KEY == 83) & (visit.HOSP_ADMIT_DT > '2014-08-01 00:00:00') & (visit.AGE >= 1.0) & (visit. AGE <= 18.0)]
+
+#View diagnosis info
+diagnosis.info()
+
+diagnosis = diagnosis.sort_values(['DX_KEY', 'ICD9_CD'])
+
+#Set up list of ICD9 Codes for reference to anaphylaxis or allergic reaction
+ICD9codes = ['995.0','995.3','995.6','995.60','995.61','995.62','995.63','995.64','995.65','995.66','995.67','995.68','995.69','995.7','999.4','999.41','999.42','999.49']
+
+#Find all diagnosis that are anaphylaxis from the ICD9codes
+anaphylaxisdiagnosis = diagnosis[diagnosis.ICD9_CD.isin(ICD9codes)]
+
+#Find all ED Primary and Secondary diagnosis visits
+anaphylaxisvisitdiagnosis = visitdiagnosis[(visitdiagnosis.DICT_DX_STS_KEY == 313) | (visitdiagnosis.DICT_DX_STS_KEY == 314)]
+
+#removes all Urgent Care departments from Hospitalencounters
+nonurgentdepts = department.DEPT_KEY[np.invert(department.SPECIALTY.str.contains('urgent', na = False, case= False))]
+
+#merge dataframes to find which visits were for ED primary or secondary for anaphylaxis
+anaphylaxisvisit = pd.merge(anaphylaxisvisitdiagnosis, anaphylaxisdiagnosis, on = 'DX_KEY')
+
+#merge dataframes to find which hospital visits are for anaphylaxis
+hospitalanaphylaxis = pd.merge(hospitalencounters, anaphylaxisvisit, on = ['VISIT_KEY', 'PAT_KEY'], suffixes=['_hospital', '_visit'])
+
+#filter out all non urgent departments for cohort before feature generation
+cohort = hospitalanaphylaxis[hospitalanaphylaxis.DEPT_KEY.isin(nonurgentdepts)]
+
+
+#Part 2, create additional features
+
+#create ANAPH_DX_IND indicator
+cohort['ANAPH_DX_IND'] = np.where(cohort.DX_NM.str.contains('anaphylaxis', na = False, case = False), 1, 0)
+
+#merge medication order into cohort
+#Find medication orders where epinephrine was ordered
+epinephrineorder = medicationorder[medicationorder.MED_ORD_NM.str.contains('epinephrine', na = False, case = False)]
+cohort = pd.merge(cohort, medicationorder[['VISIT_KEY', 'MED_ORD_NM']], on = 'VISIT_KEY')
+cohort[cohort.VISIT_KEY == 85825896]
+cohort['EPI_ORDER_IND'] = np.where(cohort.VISIT_KEY.isin(epinephrineorder.VISIT_KEY), 1, 0)
+#create EPI_ORDER_IND: finds where epinephrine was used from the medication order and applies a 1 to all rows of that visit
+cohort['EPI_ORDER_IND'] = np.where(cohort.VISIT_KEY.isin(cohort.VISIT_KEY[cohort.MED_ORD_NM.str.contains('epinephrine', na = False, case = False)]), 1, 0)
+
+#FOLLOW_UP_IND
+
+#creates outpatient visit dataframe
+outpatientvisit = visit[visit.DICT_ENC_TYPE_KEY == 108]
+outhospvisit = pd.merge(cohort[['VISIT_KEY', 'PAT_KEY', 'HOSP_DISCHRG_DT']], outpatientvisit[['VISIT_KEY', 'PAT_KEY', 'APPT_CHECKIN_DT']], on = 'PAT_KEY', suffixes=['_HOSP', '_OUTP'])
+
+outhospvisit.VISIT_KEY_HOSP[outhospvisit.APPT_CHECKIN_DT - outhospvisit.HOSP_DISCHRG_DT <= 7]
+
+outhospvisit.APPT_CHECKIN_DT - outhospvisit.HOSP_DISCHRG_DT
