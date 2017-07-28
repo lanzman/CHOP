@@ -91,7 +91,7 @@ sevendayfollowupvisit = outpatientvisit[(outpatientvisit.VISIT_DIFF_DAYS <=7) & 
 #Find patients in cohort that had an outpatient visit within 7 days of hospital discharge
 cohort['FOLLOW_UP_IND'] = np.where(cohort.PAT_KEY.isin(sevendayfollowupvisit.PAT_KEY), 1, 0)
 
-
+#### use isin more frequently and make separate dataframes where needed, follow R code example
 
 
 #Date of first outpatientvisit after discharge
