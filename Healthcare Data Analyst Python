@@ -1,0 +1,121 @@
+import os
+import numpy as np
+import pandas as pd
+import matplotlib
+import matplotlib.pyplot as plt
+matplotlib.style.use('ggplot')
+
+import seaborn as sns
+
+#Sets directory to pull in all of data from
+directory = "I:\My Documents\Data Science\CHOP"
+os.chdir(directory)
+
+# Pulls in data for analysis as .xlsx
+datadictionaryfile = './data dictionary.xlsx'
+datadictionary = pd.read_excel(datadictionaryfile)
+
+# Pulls in all data for analysis as .csv
+departmentfile = './department.csv'
+diagnosisfile = './diagnosis.csv'
+medicationorderfile = './medication_order.csv'
+visitfile = './visit.csv'
+visitdiagnosisfile = './visit_diagnosis.csv'
+department = pd.read_csv(departmentfile)
+diagnosis = pd.read_csv(diagnosisfile)
+medicationorder = pd.read_csv(medicationorderfile)
+visit = pd.read_csv(visitfile)
+visitdiagnosis = pd.read_csv(visitdiagnosisfile)
+
+#Part 1
+#Find patients where visit is a hospital encounter, after August 1, 2014, Age is greater than or equal 1 and less than or equal to 18
+visit.info()
+hospitalencounters = visit[(visit.DICT_ENC_TYPE_KEY == 83) & (visit.HOSP_ADMIT_DT > '2014-08-01 00:00:00') & (visit.AGE >= 1.0) & (visit. AGE <= 18.0)]
+
+#View diagnosis info
+diagnosis.info()
+
+#Set up list of ICD9 Codes for reference to anaphylaxis or allergic reaction
+ICD9codes = ['995.0','995.3','995.6','995.60','995.61','995.62','995.63','995.64','995.65','995.66','995.67','995.68','995.69','995.7','999.4','999.41','999.42','999.49']
+
+#Find all diagnosis that are anaphylaxis from the ICD9codes
+anaphylaxisdiagnosis = diagnosis[diagnosis.ICD9_CD.isin(ICD9codes)]
+
+#Find all ED Primary and Secondary diagnosis visits
+anaphylaxisvisitdiagnosis = visitdiagnosis[(visitdiagnosis.DICT_DX_STS_KEY == 313) | (visitdiagnosis.DICT_DX_STS_KEY == 314)]
+
+#anaphylaxisvisitdiagnosis = anaphylaxisvisitdiagnosis.drop('SEQ_NUM')
+
+#removes all Urgent Care departments from Hospitalencounters
+nonurgentdepts = department.DEPT_KEY[np.invert(department.SPECIALTY.str.contains('urgent', na = False, case= False))]
+
+#merge dataframes to find which visits were for ED primary or secondary for anaphylaxis
+anaphylaxisvisit = pd.merge(anaphylaxisvisitdiagnosis, anaphylaxisdiagnosis, on = 'DX_KEY')
+
+#merge dataframes to find which hospital visits are for anaphylaxis
+hospitalanaphylaxis = pd.merge(hospitalencounters, anaphylaxisvisit, on = ['VISIT_KEY', 'PAT_KEY'], suffixes=['_hospital', '_visit'])
+
+#filter out all non urgent departments for cohort before feature generation
+cohort = hospitalanaphylaxis[hospitalanaphylaxis.DEPT_KEY.isin(nonurgentdepts)]
+
+
+#Part 2, create additional features
+
+#finds anaphylaxispatient
+anaphylaxispatient = cohort[['VISIT_KEY','PAT_KEY']][cohort.DX_NM.str.contains('anaphylaxis', na = False, case = False)]
+
+#create ANAPH_DX_IND indicator
+cohort['ANAPH_DX_IND'] = np.where((cohort['VISIT_KEY'].isin(anaphylaxispatient['VISIT_KEY'])) & (cohort['PAT_KEY'].isin(anaphylaxispatient['PAT_KEY'])), 1, 0)
+
+#merge medication order into cohort
+#Find medication orders where epinephrine was ordered
+epinephrineorder = medicationorder[medicationorder.MED_ORD_NM.str.contains('epinephrine', na = False, case = False)]
+
+#create EPI_ORDER_IND: finds where Visit_KEY from epinephrineorder matches in cohort and applies a 1 to all rows of that visit
+cohort['EPI_ORDER_IND'] = np.where((cohort.VISIT_KEY.isin(epinephrineorder.VISIT_KEY)) & (cohort.PAT_KEY.isin(epinephrineorder.PAT_KEY)), 1, 0)
+
+#creates outpatient visit dataframe
+outpatientvisit = visit[(visit.DICT_ENC_TYPE_KEY == 108) & visit.PAT_KEY.isin(cohort.PAT_KEY)]
+
+#creates new dataframe with Hospital Discharge info and Outpatient Checkin for matching visit and patient keys
+hospoutvisit = pd.merge(cohort[['VISIT_KEY', 'PAT_KEY', 'HOSP_DISCHRG_DT']], outpatientvisit[['VISIT_KEY', 'PAT_KEY', 'APPT_CHECKIN_DT']], on = 'PAT_KEY', suffixes=['_HOSP', '_OUTP'])
+
+#Filter out outpatient visits that occured before associated hospital discharge
+hospoutvisit = hospoutvisit[pd.to_datetime(hospoutvisit['APPT_CHECKIN_DT']) > pd.to_datetime(hospoutvisit['HOSP_DISCHRG_DT'])]
+
+#Calculate the difference in days between hospital discharge and outpatient visit
+hospoutvisit['VISIT_DIFF_DAYS'] = (pd.to_datetime(hospoutvisit['APPT_CHECKIN_DT']).dt.date - pd.to_datetime(hospoutvisit['HOSP_DISCHRG_DT']).dt.date)/ np.timedelta64(1, 'D')
+
+#creates immediate hosoutvisit to filter out all visits that are not less than or equal to 7 days
+immhospoutvisit = hospoutvisit[(hospoutvisit.VISIT_DIFF_DAYS <=7) & (hospoutvisit.VISIT_DIFF_DAYS >= 0)]
+
+#Find patients in cohort that had an outpatient visit within 7 days of hospital discharge
+cohort['FOLLOW_UP_IND'] = np.where((cohort.PAT_KEY.isin(immhospoutvisit.PAT_KEY)) & cohort.VISIT_KEY.isin(immhospoutvisit.VISIT_KEY_HOSP), 1, 0)
+
+
+#Find the min date of the outpatient visits that occured within 7 days of a hospital visit
+mindate = pd.DataFrame(immhospoutvisit.groupby(['PAT_KEY', 'VISIT_KEY_HOSP'])['APPT_CHECKIN_DT'].min())
+
+#Rename APPT_CHECKIN_DT column to FOLLOW_UP_DATE
+mindate.rename(columns={'APPT_CHECKIN_DT':'FOLLOW_UP_DATE'}, inplace=True)
+
+#Merges the cohort with the mindate, fills in na where not found
+cohort = pd.merge(cohort, mindate, left_on=['PAT_KEY', 'VISIT_KEY'], right_index= True, how= 'left')
+
+#Number of days between hospital visit and first outpatient visit
+mindays = pd.DataFrame(hospoutvisit.groupby(['PAT_KEY', 'VISIT_KEY_HOSP'])['VISIT_DIFF_DAYS'].min())
+
+#Rename VISIT_DIFF_DAYS column to DAYS_TO_FOLLOW_UP
+mindays.rename(columns={'VISIT_DIFF_DAYS':'DAYS_TO_FOLLOW_UP'}, inplace=True)
+
+#Merges the cohort with the mindays, fills in na where not found
+cohort = pd.merge(cohort, mindays, left_on=['PAT_KEY', 'VISIT_KEY'], right_index= True, how= 'left')
+
+#Creates final cohort columns
+cohort = cohort[['PAT_KEY', 'VISIT_KEY', 'HOSP_ADMIT_DT', 'AGE', 'ANAPH_DX_IND', 'EPI_ORDER_IND', 'FOLLOW_UP_IND', 'FOLLOW_UP_DATE', 'DAYS_TO_FOLLOW_UP']]
+
+#Drops all duplicates
+cohort = cohort.drop_duplicates()
+
+#write to .csv file
+cohort.to_csv('Healthcare Data Analyst Cohort Python.csv')
