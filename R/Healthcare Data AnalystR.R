@@ -3,7 +3,7 @@ library(readr)
 library(dplyr)
 
 #set working directory to be location of all data files
-setwd("C:/Users/mlanza/Desktop/CHOP-master/CHOP-master")
+setwd("C:/Users/mlanza/Desktop/master/master")
 
 #pull in all fullfilenames in working directory
 fullfilenames <- list.files(pattern="*.csv")
@@ -109,4 +109,4 @@ cohort <- merge(cohort, mindays, by.y = c('PAT_KEY', 'VISIT_KEY_HOSP'), by.x = c
 cohort <- unique(cohort[c('PAT_KEY', 'VISIT_KEY', 'HOSP_ADMIT_DT', 'AGE', 'ANAPH_DX_IND', 'EPI_ORDER_IND', 'FOLLOW_UP_IND', 'FOLLOW_UP_DATE', 'DAYS_TO_FOLLOW_UP')])
 
 #write to csv file
-write.csv(cohort, 'Healthcare Data Analyst Cohort R.csv')
+write.csv(cohort, 'Data Analyst Cohort R.csv')

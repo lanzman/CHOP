@@ -118,4 +118,4 @@ cohort = cohort[['PAT_KEY', 'VISIT_KEY', 'HOSP_ADMIT_DT', 'AGE', 'ANAPH_DX_IND',
 cohort = cohort.drop_duplicates()
 
 #write to .csv file
-cohort.to_csv('Healthcare Data Analyst Cohort Python.csv')
+cohort.to_csv('Data Analyst Cohort Python.csv')
